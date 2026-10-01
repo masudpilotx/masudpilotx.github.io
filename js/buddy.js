@@ -12,7 +12,8 @@
  *
  * ---- Model ----
  * "RobotExpressive" by Tomás Laulhé (CC0) from jsDelivr, dressed up as a fighter
- * at runtime: blue gi, red gloves, red headband with fluttering tails, punches.
+ * at runtime: white karate gi with lapels, black belt, red gloves, red headband
+ * with fluttering tails. Punches, POW bursts, shadowboxing.
  * Falls back to the hand-built chibi (js/nav-buddy.js) if it can't load.
  * You can put another .glb first in MODEL_URLS (e.g. "/assets/buddy.glb").
  * Rigged models: clips are matched by name (see CLIP_NAMES).
@@ -39,8 +40,10 @@ const CLIP_NAMES = {
   punch: ["punch", "attack", "kick"],
 };
 
-// Fighter look
-const GI_COLOR = 0x2d5bff; // site accent blue
+// Fighter look (classic street-fighter gi)
+const GI_COLOR = 0xebe6da; // off-white gi (pure white blows out under the lights)
+const GI_SEAM_COLOR = 0xb3aa95; // lapel crossover lines
+const BELT_COLOR = 0x151515; // black belt
 const GEAR_COLOR = 0xe0262b; // gloves + headband
 
 // Everything he can stand on
@@ -272,6 +275,97 @@ function init(gltf) {
     scene.add(band);
     band.updateMatrixWorld(true);
     headB.attach(band);
+  }
+
+  // 4) black belt + gi lapels, fitted to the torso by slicing its vertices (rest pose)
+  const torsoRe = /hips|pelvis|abdomen|spine|torso|chest|waist|body/i;
+  const torsoPts = [];
+  const allPts = [];
+  {
+    const v = new THREE.Vector3();
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      const pos = o.geometry.attributes.position;
+      const si = o.geometry.attributes.skinIndex;
+      const sw = o.geometry.attributes.skinWeight;
+      for (let i = 0; i < pos.count; i++) {
+        const p = v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).clone();
+        allPts.push(p);
+        if (o.isSkinnedMesh && si && sw) {
+          const ids = [si.getX(i), si.getY(i), si.getZ(i), si.getW(i)];
+          const ws = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)];
+          let k = 0;
+          for (let j = 1; j < 4; j++) if (ws[j] > ws[k]) k = j;
+          const b = o.skeleton.bones[ids[k]];
+          if (b && torsoRe.test(b.name)) torsoPts.push(p);
+        }
+      }
+    });
+  }
+  const pts = torsoPts.length > 50 ? torsoPts : allPts.filter((p) => Math.abs(p.x) < CH * 0.2);
+  const slice = (y, tol) => {
+    let n = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of pts) {
+      if (Math.abs(p.y - y) > tol) continue;
+      n++;
+      if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+      if (p.z < z0) z0 = p.z; if (p.z > z1) z1 = p.z;
+    }
+    return n < 6 ? null : { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2, rz: (z1 - z0) / 2, front: z1 };
+  };
+  const sliceAt = (y) => slice(y, CH * 0.025) || slice(y, CH * 0.05) || slice(y, CH * 0.1);
+  const findBone = (re) => bones.find((b) => re.test(b.name));
+  const hipsB = findBone(/hips|pelvis/i);
+  const waistB = findBone(/abdomen|spine|waist/i) || hipsB;
+  const chestB = findBone(/torso|chest|spine2|upper/i) || waistB;
+  const neckB = findBone(/neck/i) || headB;
+  const anchorTo = (bone, obj) => {
+    scene.add(obj);
+    obj.updateMatrixWorld(true);
+    (bone || model).attach(obj);
+  };
+  const waistY = waistB ? wp(waistB).y : CH * 0.45;
+  const ws = sliceAt(waistY);
+  if (ws) {
+    const beltMat = new THREE.MeshStandardMaterial({ color: BELT_COLOR, roughness: 0.8 });
+    const belt = new THREE.Group();
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.16, 8, 32), beltMat);
+    ring.rotation.x = Math.PI / 2;
+    ring.scale.set(ws.rx * 1.06, ws.rz * 1.06, CH * 0.04 / 0.16); // ~2.7px tall band
+    belt.add(ring);
+    // knot + two hanging ends at the front
+    const fz = ws.cz + ws.rz * 1.06 + 0.4;
+    const knot = new THREE.Mesh(new THREE.BoxGeometry(CH * 0.08, CH * 0.07, CH * 0.04), beltMat);
+    knot.position.set(ws.cx, 0, fz);
+    belt.add(knot);
+    for (const sx of [-1, 1]) {
+      const g = new THREE.BoxGeometry(CH * 0.045, CH * 0.17, CH * 0.02);
+      g.translate(0, -CH * 0.085, 0);
+      const end = new THREE.Mesh(g, beltMat);
+      end.position.set(ws.cx + sx * CH * 0.015, -CH * 0.01, fz + 0.2);
+      end.rotation.z = sx * 0.3;
+      belt.add(end);
+    }
+    belt.position.set(0, waistY, 0);
+    anchorTo(waistB, belt);
+  }
+  // lapels: a V from the collar down to the belt on the chest
+  const topY = neckB ? wp(neckB).y - CH * 0.02 : waistY + CH * 0.2;
+  const cs = sliceAt(topY - CH * 0.03);
+  if (ws && cs && topY > waistY + CH * 0.05) {
+    const seamMat = new THREE.MeshStandardMaterial({ color: GI_SEAM_COLOR, roughness: 0.9 });
+    const lapels = new THREE.Group();
+    const bottom = new THREE.Vector3(ws.cx, waistY + CH * 0.03, ws.front + 0.35);
+    for (const sx of [-1, 1]) {
+      const top = new THREE.Vector3(cs.cx + sx * cs.rx * 0.45, topY, cs.front + 0.35);
+      const dir = new THREE.Vector3().subVectors(top, bottom);
+      const len = dir.length();
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(CH * 0.035, len, CH * 0.02), seamMat);
+      seam.position.copy(bottom).addScaledVector(dir, 0.5);
+      seam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      lapels.add(seam);
+    }
+    anchorTo(chestB, lapels);
   }
 
   // head bone (for looking at the cursor) + face morphs (expressions), if the model has them
