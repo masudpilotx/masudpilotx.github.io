@@ -10,10 +10,11 @@
  *  - off-screen   -> drops in from the sky
  *  - click him on an element -> dance
  *
- * ---- Models ----
- * Tries MODEL_URLS in order: your own model at /assets/buddy.glb first, then the
- * "RobotExpressive" robot by Tomás Laulhé (CC0) from jsDelivr, then the
- * hand-built chibi (js/nav-buddy.js) if nothing loads.
+ * ---- Model ----
+ * "RobotExpressive" by Tomás Laulhé (CC0) from jsDelivr, dressed up as a fighter
+ * at runtime: blue gi, red gloves, red headband with fluttering tails, punches.
+ * Falls back to the hand-built chibi (js/nav-buddy.js) if it can't load.
+ * You can put another .glb first in MODEL_URLS (e.g. "/assets/buddy.glb").
  * Rigged models: clips are matched by name (see CLIP_NAMES).
  * Static models (no rig/animations) get procedural moves instead: bounce, spin,
  * tumble while falling, pancake on crash, wiggle dance.
@@ -22,7 +23,6 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/+esm";
 import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js/+esm";
 
 const MODEL_URLS = [
-  "/assets/buddy.glb?v=1",
   "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/RobotExpressive/RobotExpressive.glb",
 ];
 
@@ -36,7 +36,12 @@ const CLIP_NAMES = {
   wave: ["wave"],
   cheer: ["thumbsup", "yes", "victory", "cheer"],
   dance: ["dance"],
+  punch: ["punch", "attack", "kick"],
 };
+
+// Fighter look
+const GI_COLOR = 0x2d5bff; // site accent blue
+const GEAR_COLOR = 0xe0262b; // gloves + headband
 
 // Everything he can stand on
 const PLATFORMS = [
@@ -171,6 +176,103 @@ function init(gltf) {
   model.scale.setScalar(s);
   model.position.set(-((box.min.x + box.max.x) / 2) * s, -box.min.y * s, -((box.min.z + box.max.z) / 2) * s);
   body.add(model);
+  model.updateMatrixWorld(true);
+
+  // ---------- Fighter makeover ----------
+  // 1) gi: recolor the robot's yellow body parts
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+      if (!m || !m.color) return;
+      const hsl = {};
+      m.color.getHSL(hsl);
+      if (hsl.s > 0.35 && hsl.h > 0.07 && hsl.h < 0.2) m.color.setHex(GI_COLOR);
+    });
+  });
+  const gearMat = new THREE.MeshStandardMaterial({ color: GEAR_COLOR, roughness: 0.55 });
+  const bones = [];
+  model.traverse((o) => { if (o.isBone) bones.push(o); });
+  const depth = (b) => { let d = 0; for (let p = b.parent; p; p = p.parent) d++; return d; };
+  const wp = (o) => o.getWorldPosition(new THREE.Vector3());
+  // bounding box of the vertices a bone mostly controls (rest pose)
+  const boneBox = (bone) => {
+    const out = new THREE.Box3();
+    const v = new THREE.Vector3();
+    model.traverse((o) => {
+      if (!o.isSkinnedMesh) return;
+      const idx = o.skeleton.bones.indexOf(bone);
+      if (idx < 0) return;
+      const pos = o.geometry.attributes.position;
+      const si = o.geometry.attributes.skinIndex;
+      const sw = o.geometry.attributes.skinWeight;
+      if (!si || !sw) return;
+      for (let i = 0; i < pos.count; i++) {
+        const ids = [si.getX(i), si.getY(i), si.getZ(i), si.getW(i)];
+        const ws = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)];
+        for (let k = 0; k < 4; k++) {
+          if (ids[k] === idx && ws[k] > 0.5) {
+            out.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld));
+            break;
+          }
+        }
+      }
+    });
+    return out;
+  };
+
+  // 2) gloves on both hands
+  let hands = bones.filter((b) => /hand|palm|wrist|fist/i.test(b.name));
+  const sides = [[], []];
+  (hands.length ? hands : bones).forEach((b) => sides[wp(b).x > 0 ? 1 : 0].push(b));
+  sides.forEach((list) => {
+    if (!list.length) return;
+    let bone;
+    if (hands.length) bone = list.sort((a, b) => depth(a) - depth(b))[0];
+    else {
+      const far = list.sort((a, b) => Math.abs(wp(b).x) - Math.abs(wp(a).x))[0]; // outermost bone (a finger)
+      bone = far.parent && far.parent.isBone ? far.parent : far;
+    }
+    const glove = new THREE.Mesh(new THREE.SphereGeometry(CH * 0.1, 16, 12), gearMat);
+    const child = bone.children.find((c) => c.isBone);
+    glove.position.copy(child ? wp(bone).lerp(wp(child), 0.6) : wp(bone)); // sit on the fist, not the wrist
+    scene.add(glove);
+    glove.updateMatrixWorld(true);
+    bone.attach(glove);
+  });
+
+  // 3) headband + tails
+  const tails = [];
+  const headB = bones.find((b) => /^head$/i.test(b.name)) || bones.find((b) => /head/i.test(b.name));
+  if (headB) {
+    let hb = boneBox(headB);
+    if (hb.isEmpty()) {
+      const hp = wp(headB);
+      hb = new THREE.Box3(hp.clone().add(new THREE.Vector3(-CH * 0.18, 0, -CH * 0.18)), hp.clone().add(new THREE.Vector3(CH * 0.18, CH * 0.35, CH * 0.18)));
+    }
+    const c = hb.getCenter(new THREE.Vector3());
+    const sz = hb.getSize(new THREE.Vector3());
+    const rx = (sz.x / 2) * 1.06;
+    const rz = (sz.z / 2) * 1.06;
+    const band = new THREE.Mesh(new THREE.TorusGeometry(1, 0.2, 8, 28), gearMat);
+    band.rotation.x = Math.PI / 2; // lie flat around the head
+    band.scale.set(rx, rz, (rx + rz) / 2);
+    band.position.set(c.x, c.y + sz.y * 0.18, c.z);
+    // two tails knotted at the back (band-local -y = world back)
+    for (const sx of [-1, 1]) {
+      const pivot = new THREE.Group();
+      pivot.position.set(sx * 0.12, -1.02, 0);
+      pivot.rotation.z = sx * 0.25;
+      const tailGeo = new THREE.BoxGeometry(0.3, 1.1, 0.08);
+      tailGeo.translate(0, -0.55, 0);
+      pivot.add(new THREE.Mesh(tailGeo, gearMat));
+      pivot.userData.side = sx;
+      band.add(pivot);
+      tails.push(pivot);
+    }
+    scene.add(band);
+    band.updateMatrixWorld(true);
+    headB.attach(band);
+  }
 
   // head bone (for looking at the cursor) + face morphs (expressions), if the model has them
   let headBone = null;
@@ -284,6 +386,40 @@ function init(gltf) {
     }
   };
 
+  // comic "POW!" burst + make the element flinch
+  const pow = (x, y, el) => {
+    const d = document.createElement("div");
+    d.textContent = pick(["POW!", "BAM!", "WHAM!", "K.O.!"]);
+    Object.assign(d.style, {
+      position: "fixed", left: x + "px", top: y + "px", zIndex: "1002", pointerEvents: "none",
+      background: "#ffd400", color: "#111", border: "2px solid #111", borderRadius: "6px",
+      boxShadow: "2px 2px 0 #111", padding: "1px 6px", font: "900 13px Outfit, sans-serif",
+      letterSpacing: "0.03em", whiteSpace: "nowrap",
+    });
+    document.body.appendChild(d);
+    const rot = (Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 8);
+    d.animate(
+      [
+        { transform: `translate(-50%, -100%) rotate(${rot}deg) scale(0.3)`, opacity: 0 },
+        { transform: `translate(-50%, -140%) rotate(${rot}deg) scale(1.15)`, opacity: 1, offset: 0.25 },
+        { transform: `translate(-50%, -170%) rotate(${rot}deg) scale(1)`, opacity: 0 },
+      ],
+      { duration: 700, easing: "ease-out" }
+    ).onfinish = () => d.remove();
+    if (el && el.animate) {
+      el.animate(
+        [
+          { transform: "translate(0, 0)" },
+          { transform: "translate(3px, 2px)" },
+          { transform: "translate(-3px, -1px)" },
+          { transform: "translate(2px, 1px)" },
+          { transform: "translate(0, 0)" },
+        ],
+        { duration: 220, composite: "add" }
+      );
+    }
+  };
+
   let bubbleT = 0;
   let bubbleW = 0;
   const say = (text, dur = 1.5) => {
@@ -304,10 +440,21 @@ function init(gltf) {
     landT: 0, landDur: 0.16, landSquash: 0.2, crash: false,
     dir: 1, squash: 0, dizzy: 0, wasPanic: false,
     proc: null, procT: 0, procDur: 0, pancake: false,
+    introDone: false, idleT: 0, nextShadowbox: 8,
   };
   const rigged = gltf.animations.length > 0;
   // procedural moves for static models (or rigged ones missing a clip)
   const doProc = (name, dur) => { st.proc = name; st.procT = 0; st.procDur = dur; };
+  let powTimer = 0;
+  const punch = (withPow) => {
+    if (clips.punch) playSeq(["punch"], 1.3);
+    else doProc("bounce", 0.5);
+    clearTimeout(powTimer);
+    if (withPow) {
+      const el = st.el;
+      powTimer = setTimeout(() => { if (st.el === el && st.mode !== "air") pow(st.sx + st.dir * 8, st.sy - CH * 0.6, el); }, 260);
+    }
+  };
 
   const anchor = () => {
     const r = rectOf(st.el);
@@ -390,7 +537,8 @@ function init(gltf) {
       puff(e.x, e.y, 9, 1.7);
       if (clips.crash) playSeq(["crash", "getUp"], 1.6);
       else { st.pancake = true; st.landDur = 0.7; st.landSquash = 0.55; }
-      say(pick(["I'm okay!", "Ouch.", "Nailed it.", "10/10 landing"]), 1.8);
+      say(pick(["K.O.!", "I'm okay!", "Not like this...", "10/10 landing"]), 1.8);
+      st.introDone = true;
       return;
     }
 
@@ -399,12 +547,14 @@ function init(gltf) {
     if (st.type !== "hop") puff(e.x, e.y, st.type === "fall" ? 5 : 4, 1);
 
     const gesture = (clip, proc, dur) => (clips[clip] ? playSeq([clip]) : doProc(proc, dur));
-    if (el.matches(".contact-section .btn")) { gesture("wave", "bounce", 0.8); say("Say hi! \u{1F44B}", 2); }
+    if (!st.introDone) { st.introDone = true; play("idle"); say("Round 1... FIGHT!", 1.8); }
+    else if (el.matches(".contact-section .btn")) { punch(true); say("New challenger? Say hi! \u{1F44A}", 2.2); }
     else if (el.matches(".hero-image")) { gesture("cheer", "spin", 0.6); say("That's me!"); }
-    else if (el.matches(".nav-actions .btn")) { gesture("wave", "bounce", 0.8); say("Let's talk!"); }
+    else if (el.matches(".nav-actions .btn")) { punch(true); say("Let's talk!"); }
+    else if (el.matches(".btn, .tag, .contact-section a")) punch(true);
     else if (st.type === "super") {
       gesture("cheer", "spin", 0.6);
-      if (Math.random() < 0.5) say(pick(["Wheee!", "Parkour!", "Too easy"]), 1.1);
+      if (Math.random() < 0.6) say(pick(["Shoryuken!", "Hyah!", "Too easy"]), 1.1);
     } else play("idle", { fade: 0.2 });
   };
 
@@ -566,7 +716,26 @@ function init(gltf) {
       headBone.rotation.x += look.x;
     }
 
+    // Shadowboxing when he's been chilling for a while
+    if (st.mode === "idle" && !st.proc && !queue.length && (!clips.idle || (current && current.getClip() === clips.idle))) {
+      st.idleT += dt;
+      if (st.idleT > st.nextShadowbox) {
+        st.idleT = 0;
+        st.nextShadowbox = 7 + Math.random() * 6;
+        punch(false);
+        if (Math.random() < 0.35) say(pick(["Hyah!", "Hadouken!", "Fight me", "Bring it"]), 1);
+      }
+    } else if (st.mode !== "idle") st.idleT = 0;
+
+    // Headband tails flutter (stream back while flying)
+    for (const tl of tails) {
+      const base = airborne ? -0.25 : -0.95;
+      const flap = Math.sin(time * (airborne ? 22 : 7) + tl.userData.side) * (airborne ? 0.35 : 0.15);
+      tl.rotation.x += (base + flap - tl.rotation.x) * Math.min(1, dt * 12);
+    }
+
     // Expressions (RobotExpressive has Surprised / Sad / Angry)
+    morph("angry", current && clips.punch && current.getClip() === clips.punch ? 1 : 0);
     morph("surprised", panic ? 1 : 0);
     morph("sad", st.dizzy > 0 ? 1 : 0);
 
