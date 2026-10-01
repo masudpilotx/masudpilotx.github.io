@@ -254,9 +254,19 @@ nav {
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow-hard);
-  background: var(--surface);
+  background: #000; /* matches the pixel canvas background, no white flash */
 }
 
+/* Pixelated canvas portrait */
+.hero-image canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16; /* placeholder until the image loads */
+  cursor: crosshair;
+  touch-action: pan-y;
+}
+
+/* No-JS fallback image */
 .hero-image img {
   width: 100%;
   height: auto;

@@ -68,11 +68,29 @@
             </div>
           </div>
           <div class="hero-image">
-            <img
-              src="assets/images/profile.png?w=400&h=500&fit=crop&q=80"
-              alt="Masud Pilot"
-              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22500%22%3E%3Crect fill=%22%23eee%22 width=%22400%22 height=%22500%22/%3E%3Ctext fill=%22%23111%22 font-family=%22Arial%22 font-size=%2224%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22%3EMasud Pilot%3C/text%3E%3C/svg%3E'"
-            />
+            <!-- Interactive pixelated portrait (see js/pixelated-canvas.js) -->
+            <canvas
+              data-pixelated-canvas
+              data-src="assets/images/profile.png"
+              data-cell-size="3"
+              data-dot-scale="0.9"
+              data-shape="square"
+              data-background-color="#000000"
+              data-dropout-strength="0.4"
+              data-distortion-strength="3"
+              data-distortion-radius="80"
+              data-distortion-mode="swirl"
+              data-follow-speed="0.2"
+              data-jitter-strength="4"
+              data-jitter-speed="4"
+              data-tint-color="#FFFFFF"
+              data-tint-strength="0.2"
+              role="img"
+              aria-label="Pixelated portrait of Masud Pilot"
+            ></canvas>
+            <noscript>
+              <img src="assets/images/profile.png" alt="Masud Pilot" />
+            </noscript>
           </div>
         </div>
       </div>
@@ -288,6 +306,7 @@
     </footer>
 
     <!-- Scripts -->
+    <script src="js/pixelated-canvas.js"></script>
     <script src="js/main.js"></script>
   </body>
 </html>
