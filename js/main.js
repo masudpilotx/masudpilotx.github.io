@@ -21,9 +21,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // 3D chibi that roams the page (desktop only, loads Three.js from CDN)
-  // Bump ?v= when you change nav-buddy.js so browsers grab the fresh copy
-  import("/js/nav-buddy.js?v=2").catch((err) =>
-    console.warn("Page buddy failed to load:", err)
-  );
+  // Animated 3D GLB buddy that roams the page (desktop only).
+  // Falls back to the hand-built chibi (nav-buddy.js) if the model can't load.
+  // Bump ?v= when you change buddy.js so browsers grab the fresh copy
+  import("/js/buddy.js?v=1").catch((err) => {
+    console.warn("GLB buddy failed, using built-in chibi:", err);
+    import("/js/nav-buddy.js?v=2");
+  });
 });
