@@ -20,4 +20,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
+
+  // 3D chibi that hops between nav links (desktop only, loads Three.js from CDN)
+  // Bump ?v= when you change nav-buddy.js so browsers grab the fresh copy
+  import("/js/nav-buddy.js?v=1").catch((err) =>
+    console.warn("Nav buddy failed to load:", err)
+  );
 });
