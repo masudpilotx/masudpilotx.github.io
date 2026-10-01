@@ -11,7 +11,9 @@
  *  - click him on an element -> dance
  *
  * ---- Model ----
- * "RobotExpressive" by Tomás Laulhé (CC0) from jsDelivr, dressed up as a fighter
+ * 1st choice: your own complete fighter model at /assets/buddy.glb (the Iori chibi).
+ *   Static models get procedural moves (tumble, pancake, spin, wiggle) + STATIC_PROFILE lines.
+ * 2nd choice: "RobotExpressive" by Tomás Laulhé (CC0) from jsDelivr, dressed up as a fighter
  * at runtime in KOF-inspired outfits: Kyo, Iori, Terry (+ a dojo gi). Random
  * fighter on first visit, DOUBLE-CLICK the thing he's standing on to swap
  * (remembered in localStorage). Punches with colored fire/energy, POW bursts.
@@ -25,8 +27,12 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/+esm";
 import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js/+esm";
 
 const MODEL_URLS = [
+  "/assets/buddy.glb?v=2", // your complete fighter model (Iori chibi) if uploaded
   "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/RobotExpressive/RobotExpressive.glb",
 ];
+
+// Personality for complete static models (no rig), e.g. the Iori chibi
+const STATIC_PROFILE = { label: "Iori \u{1F319}", fx: 0x9b4dff, lines: ["Yasakani!", "Ha ha ha!", "Die... I mean, hi"] };
 
 // First matching name wins (substring match, case-insensitive)
 const CLIP_NAMES = {
@@ -193,6 +199,11 @@ function init(gltf) {
   const waistY = waistB ? wp(waistB).y : CH * 0.45;
   const neckY = neckB ? wp(neckB).y : waistY + CH * 0.25;
 
+  const tails = [];
+  let outfit = STATIC_PROFILE;
+  let nextOutfit = null;
+  const DRESS_UP = gltf.animations.length > 0 && bones.length > 0; // only dress up the rigged robot
+  if (DRESS_UP) {
   // Rest-pose vertex scan: world position + dominant bone for every vertex
   const torsoRe = /hips|pelvis|abdomen|spine|torso|chest|waist|body/i;
   const headRe = /head|neck|jaw|eye/i;
@@ -337,9 +348,7 @@ function init(gltf) {
   const OUTFIT_ORDER = ["kyo", "iori", "terry", "gi"];
   const SKIN = 0xf1c4a1;
 
-  const tails = [];
   let gear = [];
-  let outfit = null;
   const mat = (color, rough = 0.6) => new THREE.MeshStandardMaterial({ color, roughness: rough });
   const attachTo = (bone, obj) => {
     scene.add(obj);
@@ -517,11 +526,12 @@ function init(gltf) {
   try { outfitKey = localStorage.getItem("buddyOutfit"); } catch (e) {}
   if (!OUTFITS[outfitKey]) outfitKey = pick(["kyo", "iori", "terry"]); // random fighter on first visit
   applyOutfit(outfitKey);
-  const nextOutfit = () => {
+  nextOutfit = () => {
     outfitKey = OUTFIT_ORDER[(OUTFIT_ORDER.indexOf(outfitKey) + 1) % OUTFIT_ORDER.length];
     applyOutfit(outfitKey);
     return OUTFITS[outfitKey];
   };
+  } // end DRESS_UP
 
   // head bone (for looking at the cursor) + face morphs (expressions), if the model has them
   let headBone = null;
@@ -850,7 +860,7 @@ function init(gltf) {
   // Double-click the thing he's standing on: costume change!
   document.addEventListener("dblclick", (e) => {
     const el = e.target.closest ? e.target.closest(PLATFORMS) : null;
-    if (!el || el !== st.el || st.mode === "air") return;
+    if (!nextOutfit || !el || el !== st.el || st.mode === "air") return;
     const o = nextOutfit();
     puff(st.sx, st.sy - CH * 0.5, 10, 1.4);
     doProc("spin", 0.5);

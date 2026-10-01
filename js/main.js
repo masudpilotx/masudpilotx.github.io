@@ -22,9 +22,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // 3D fighter buddy that roams the page (desktop only).
-  // Falls back to the hand-built chibi (nav-buddy.js) if the model can't load.
+  // Uses /assets/buddy.glb (Iori) if present, else the CC0 robot, else the hand-built chibi.
   // Bump ?v= when you change buddy.js so browsers grab the fresh copy
-  import("/js/buddy.js?v=5").catch((err) => {
+  import("/js/buddy.js?v=6").catch((err) => {
     console.warn("GLB buddy failed, using built-in chibi:", err);
     import("/js/nav-buddy.js?v=2");
   });
