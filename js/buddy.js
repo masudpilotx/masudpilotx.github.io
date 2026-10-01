@@ -10,18 +10,21 @@
  *  - off-screen   -> drops in from the sky
  *  - click him on an element -> dance
  *
- * ---- Swapping the model ----
- * Default model: "RobotExpressive" by Tomás Laulhé (CC0), served from jsDelivr.
- * To use your own: upload a .glb to assets/models/ and change MODEL_URL below,
- * e.g. "/assets/models/buddy.glb". Clips are matched by name (case-insensitive),
- * see CLIP_NAMES. Missing clips are fine, he just skips that animation.
- * If the model fails to load, the hand-built chibi (js/nav-buddy.js) is used.
+ * ---- Models ----
+ * Tries MODEL_URLS in order: your own model at /assets/buddy.glb first, then the
+ * "RobotExpressive" robot by Tomás Laulhé (CC0) from jsDelivr, then the
+ * hand-built chibi (js/nav-buddy.js) if nothing loads.
+ * Rigged models: clips are matched by name (see CLIP_NAMES).
+ * Static models (no rig/animations) get procedural moves instead: bounce, spin,
+ * tumble while falling, pancake on crash, wiggle dance.
  */
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/+esm";
 import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js/+esm";
 
-const MODEL_URL =
-  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/RobotExpressive/RobotExpressive.glb";
+const MODEL_URLS = [
+  "/assets/buddy.glb?v=1",
+  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/RobotExpressive/RobotExpressive.glb",
+];
 
 // First matching name wins (substring match, case-insensitive)
 const CLIP_NAMES = {
@@ -60,9 +63,14 @@ const desktop = window.matchMedia("(min-width: 769px) and (hover: hover)");
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const firstLink = document.querySelector(".nav-links a");
 
-if (firstLink) {
+const loadModel = (i) => {
+  if (i >= MODEL_URLS.length) {
+    console.warn("Page buddy: no model loaded, using the built-in chibi");
+    import("/js/nav-buddy.js?v=2");
+    return;
+  }
   new GLTFLoader().load(
-    MODEL_URL,
+    MODEL_URLS[i],
     (gltf) => {
       try {
         init(gltf);
@@ -71,13 +79,10 @@ if (firstLink) {
       }
     },
     undefined,
-    (err) => {
-      // model failed to load: fall back to the hand-built chibi
-      console.warn("Page buddy: couldn't load model, using the built-in chibi", MODEL_URL, err);
-      import("/js/nav-buddy.js?v=2");
-    }
+    () => loadModel(i + 1)
   );
-}
+};
+if (firstLink) loadModel(0);
 
 function init(gltf) {
   // ---------- Canvas that follows the character ----------
@@ -130,8 +135,8 @@ function init(gltf) {
   camera.position.set(0, 0, 500);
   camera.lookAt(0, 0, 0);
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 2.4));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.8));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.3);
   sun.position.set(-2, 3, 4);
   scene.add(sun);
 
@@ -150,9 +155,19 @@ function init(gltf) {
   model.traverse((o) => {
     if (o.isMesh) o.frustumCulled = false; // skinned meshes can get culled wrongly
   });
-  const box = new THREE.Box3().setFromObject(model);
+  // measure from raw geometry bounds (skinned-mesh bounds can be wildly off before the first frame)
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const tmpBox = new THREE.Box3();
+  model.traverse((o) => {
+    if (o.isMesh && o.geometry) {
+      o.geometry.computeBoundingBox();
+      tmpBox.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      box.union(tmpBox);
+    }
+  });
   const size = box.getSize(new THREE.Vector3());
-  const s = CH / (size.y || 1);
+  const s = size.y > 0 && isFinite(size.y) ? CH / size.y : 1;
   model.scale.setScalar(s);
   model.position.set(-((box.min.x + box.max.x) / 2) * s, -box.min.y * s, -((box.min.z + box.max.z) / 2) * s);
   body.add(model);
@@ -288,7 +303,11 @@ function init(gltf) {
     chargeT: 0, chargeDur: 0.07,
     landT: 0, landDur: 0.16, landSquash: 0.2, crash: false,
     dir: 1, squash: 0, dizzy: 0, wasPanic: false,
+    proc: null, procT: 0, procDur: 0, pancake: false,
   };
+  const rigged = gltf.animations.length > 0;
+  // procedural moves for static models (or rigged ones missing a clip)
+  const doProc = (name, dur) => { st.proc = name; st.procT = 0; st.procDur = dur; };
 
   const anchor = () => {
     const r = rectOf(st.el);
@@ -344,6 +363,7 @@ function init(gltf) {
     st.chargeT = 0;
     st.chargeDur = st.type === "super" ? 0.24 : 0.07;
     queue = [];
+    st.proc = null;
 
     // fit the jump clip to the airtime
     if (clips.jump) {
@@ -356,6 +376,7 @@ function init(gltf) {
     st.mode = "land";
     st.landT = 0;
     st.crash = false;
+    st.pancake = false;
     const e = anchor();
     st.sx = e.x;
     st.sy = e.y;
@@ -368,7 +389,7 @@ function init(gltf) {
       st.dizzy = 2;
       puff(e.x, e.y, 9, 1.7);
       if (clips.crash) playSeq(["crash", "getUp"], 1.6);
-      else play("idle");
+      else { st.pancake = true; st.landDur = 0.7; st.landSquash = 0.55; }
       say(pick(["I'm okay!", "Ouch.", "Nailed it.", "10/10 landing"]), 1.8);
       return;
     }
@@ -377,11 +398,12 @@ function init(gltf) {
     st.landDur = st.type === "hop" ? 0.16 : 0.25;
     if (st.type !== "hop") puff(e.x, e.y, st.type === "fall" ? 5 : 4, 1);
 
-    if (el.matches(".contact-section .btn")) { playSeq(["wave"]); say("Say hi! \u{1F44B}", 2); }
-    else if (el.matches(".hero-image")) { playSeq(["cheer"]); say("That's me!"); }
-    else if (el.matches(".nav-actions .btn")) { playSeq(["wave"]); say("Let's talk!"); }
+    const gesture = (clip, proc, dur) => (clips[clip] ? playSeq([clip]) : doProc(proc, dur));
+    if (el.matches(".contact-section .btn")) { gesture("wave", "bounce", 0.8); say("Say hi! \u{1F44B}", 2); }
+    else if (el.matches(".hero-image")) { gesture("cheer", "spin", 0.6); say("That's me!"); }
+    else if (el.matches(".nav-actions .btn")) { gesture("wave", "bounce", 0.8); say("Let's talk!"); }
     else if (st.type === "super") {
-      playSeq(["cheer"]);
+      gesture("cheer", "spin", 0.6);
       if (Math.random() < 0.5) say(pick(["Wheee!", "Parkour!", "Too easy"]), 1.1);
     } else play("idle", { fade: 0.2 });
   };
@@ -400,7 +422,7 @@ function init(gltf) {
   document.addEventListener("click", (e) => {
     const el = e.target.closest ? e.target.closest(PLATFORMS) : null;
     if (el && el === st.el && st.mode === "idle") {
-      if (clips.dance) { playSeq(["dance"]); if (Math.random() < 0.4) say(pick(["\u{1F57A}", "Party!", "Hire me, I dance too"]), 1.3); }
+      if (clips.dance || !rigged) { if (clips.dance) playSeq(["dance"]); else doProc("dance", 1.6); if (Math.random() < 0.4) say(pick(["\u{1F57A}", "Party!", "Hire me, I dance too"]), 1.3); }
       else goTo(el, true);
     }
   });
@@ -471,7 +493,10 @@ function init(gltf) {
       case "land": {
         st.landT += dt;
         const p = Math.min(1, st.landT / st.landDur);
-        squashTarget = st.landSquash * (1 - p);
+        if (st.pancake) {
+          // flattened like a pancake, then pops back up with a little overshoot
+          squashTarget = p < 0.55 ? st.landSquash : st.landSquash * (1 - (p - 0.55) / 0.45) - 0.12 * Math.sin((Math.PI * (p - 0.55)) / 0.45);
+        } else squashTarget = st.landSquash * (1 - p);
         const e = anchor();
         st.sx = e.x;
         st.sy = e.y;
@@ -492,8 +517,35 @@ function init(gltf) {
     }
     mixer.update(dt);
 
+    // procedural moves (static models): bounce / spin / dance, tumble while falling, idle sway
+    let bounceY = 0;
+    let extraYaw = 0;
+    let wiggle = 0;
+    if (st.proc) {
+      st.procT += dt;
+      const k = Math.min(1, st.procT / st.procDur);
+      if (st.proc === "bounce") bounceY = Math.abs(Math.sin(k * Math.PI * 2)) * 7;
+      if (st.proc === "spin") { extraYaw = Math.PI * 2 * easeInOut(k); bounceY = Math.sin(k * Math.PI) * 6; }
+      if (st.proc === "dance") {
+        bounceY = Math.abs(Math.sin(st.procT * 12)) * 4;
+        wiggle = Math.sin(st.procT * 12) * 0.25;
+        extraYaw = Math.sin(st.procT * 6) * 0.8;
+      }
+      if (k >= 1) st.proc = null;
+    }
+    if (!rigged) {
+      if (panic) {
+        flip.rotation.x = Math.sin(time * 15) * 0.5; // tumbling
+        extraYaw += time * 14;
+      } else if (st.mode === "idle" && !reduceMotion && !st.proc) {
+        wiggle += Math.sin(time * 2) * 0.04; // gentle sway
+      }
+    }
+    body.position.y = -CH / 2 + bounceY;
+
+    const breath = !rigged && st.mode === "idle" && !reduceMotion ? Math.sin(time * 2.6) * 0.02 : 0;
     st.squash += (squashTarget - st.squash) * Math.min(1, dt * 30);
-    body.scale.set(1 + st.squash * 0.6, 1 - st.squash, 1 + st.squash * 0.6);
+    body.scale.set(1 + st.squash * 0.6, 1 - st.squash + breath, 1 + st.squash * 0.6);
 
     // Facing: sideways while moving, turned toward the cursor when chilling, panicking at the camera when falling
     const airborne = st.mode === "charge" || st.mode === "air";
@@ -501,7 +553,8 @@ function init(gltf) {
     let yawTarget = clamp(dx / 400, -0.6, 0.6);
     if (airborne) yawTarget = panic ? 0 : st.dir * (Math.PI / 2) * 0.85;
     root.rotation.y += (yawTarget - root.rotation.y) * Math.min(1, dt * 12);
-    root.rotation.z = panic ? Math.sin(time * 12) * 0.15 : 0;
+    root.rotation.z = (panic ? Math.sin(time * 12) * 0.15 : 0) + wiggle;
+    model.rotation.y = extraYaw; // procedural spins on top of facing
 
     // Look at the cursor (added on top of the animation)
     if (headBone) {
