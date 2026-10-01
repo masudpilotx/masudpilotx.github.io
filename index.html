@@ -22,8 +22,8 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
 
-    <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css" />
+    <!-- Custom CSS (bump ?v= when you change it so browsers don't serve a stale copy) -->
+    <link rel="stylesheet" href="css/style.css?v=3" />
   </head>
 
   <body>
@@ -77,15 +77,14 @@
               data-dot-scale="0.9"
               data-shape="square"
               data-background-color="#000000"
-              data-dropout-strength="0.12"
+              data-dropout-strength="0"
               data-distortion-strength="3"
               data-distortion-radius="80"
               data-distortion-mode="swirl"
               data-follow-speed="0.2"
               data-jitter-strength="4"
               data-jitter-speed="4"
-              data-tint-color="#FFFFFF"
-              data-tint-strength="0.15"
+              data-tint-strength="0"
               role="img"
               aria-label="Pixelated portrait of Masud Pilot"
             ></canvas>
@@ -307,7 +306,7 @@
     </footer>
 
     <!-- Scripts -->
-    <script src="js/pixelated-canvas.js"></script>
+    <script src="js/pixelated-canvas.js?v=3"></script>
     <script src="js/main.js"></script>
   </body>
 </html>
