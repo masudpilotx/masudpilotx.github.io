@@ -68,15 +68,16 @@
             </div>
           </div>
           <div class="hero-image">
-            <!-- Interactive pixelated portrait (see js/pixelated-canvas.js) -->
+            <!-- Interactive pixelated portrait (see js/pixelated-canvas.js).
+                 B&W by default, color on hover is handled in css/style.css -->
             <canvas
               data-pixelated-canvas
               data-src="assets/images/profile.png"
-              data-cell-size="3"
+              data-cell-size="4"
               data-dot-scale="0.9"
               data-shape="square"
               data-background-color="#000000"
-              data-dropout-strength="0.4"
+              data-dropout-strength="0.12"
               data-distortion-strength="3"
               data-distortion-radius="80"
               data-distortion-mode="swirl"
@@ -84,7 +85,7 @@
               data-jitter-strength="4"
               data-jitter-speed="4"
               data-tint-color="#FFFFFF"
-              data-tint-strength="0.2"
+              data-tint-strength="0.15"
               role="img"
               aria-label="Pixelated portrait of Masud Pilot"
             ></canvas>

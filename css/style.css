@@ -257,13 +257,19 @@ nav {
   background: #000; /* matches the pixel canvas background, no white flash */
 }
 
-/* Pixelated canvas portrait */
+/* Pixelated canvas portrait: B&W by default, full color on hover */
 .hero-image canvas {
   display: block;
   width: 100%;
   aspect-ratio: 9 / 16; /* placeholder until the image loads */
   cursor: crosshair;
   touch-action: pan-y;
+  filter: grayscale(100%) brightness(1.2) contrast(1.1);
+  transition: filter 0.4s ease;
+}
+
+.hero-image:hover canvas {
+  filter: grayscale(0%) brightness(1.15) contrast(1.05) saturate(1.1);
 }
 
 /* No-JS fallback image */
