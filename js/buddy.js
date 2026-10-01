@@ -12,8 +12,9 @@
  *
  * ---- Model ----
  * "RobotExpressive" by Tomás Laulhé (CC0) from jsDelivr, dressed up as a fighter
- * at runtime: white karate gi with lapels, black belt, red gloves, red headband
- * with fluttering tails. Punches, POW bursts, shadowboxing.
+ * at runtime in KOF-inspired outfits: Kyo, Iori, Terry (+ a dojo gi). Random
+ * fighter on first visit, DOUBLE-CLICK the thing he's standing on to swap
+ * (remembered in localStorage). Punches with colored fire/energy, POW bursts.
  * Falls back to the hand-built chibi (js/nav-buddy.js) if it can't load.
  * You can put another .glb first in MODEL_URLS (e.g. "/assets/buddy.glb").
  * Rigged models: clips are matched by name (see CLIP_NAMES).
@@ -39,12 +40,6 @@ const CLIP_NAMES = {
   dance: ["dance"],
   punch: ["punch", "attack", "kick"],
 };
-
-// Fighter look (classic street-fighter gi)
-const GI_COLOR = 0xebe6da; // off-white gi (pure white blows out under the lights)
-const GI_SEAM_COLOR = 0xb3aa95; // lapel crossover lines
-const BELT_COLOR = 0x151515; // black belt
-const GEAR_COLOR = 0xe0262b; // gloves + headband
 
 // Everything he can stand on
 const PLATFORMS = [
@@ -181,131 +176,75 @@ function init(gltf) {
   body.add(model);
   model.updateMatrixWorld(true);
 
-  // ---------- Fighter makeover ----------
-  // 1) gi: recolor the robot's yellow body parts
-  model.traverse((o) => {
-    if (!o.isMesh) return;
-    (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
-      if (!m || !m.color) return;
-      const hsl = {};
-      m.color.getHSL(hsl);
-      if (hsl.s > 0.35 && hsl.h > 0.07 && hsl.h < 0.2) m.color.setHex(GI_COLOR);
-    });
-  });
-  const gearMat = new THREE.MeshStandardMaterial({ color: GEAR_COLOR, roughness: 0.55 });
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+  // ---------- Fighter outfits (KOF-inspired: Kyo / Iori / Terry, plus a dojo gi) ----------
   const bones = [];
   model.traverse((o) => { if (o.isBone) bones.push(o); });
   const depth = (b) => { let d = 0; for (let p = b.parent; p; p = p.parent) d++; return d; };
   const wp = (o) => o.getWorldPosition(new THREE.Vector3());
-  // bounding box of the vertices a bone mostly controls (rest pose)
-  const boneBox = (bone) => {
-    const out = new THREE.Box3();
-    const v = new THREE.Vector3();
-    model.traverse((o) => {
-      if (!o.isSkinnedMesh) return;
-      const idx = o.skeleton.bones.indexOf(bone);
-      if (idx < 0) return;
-      const pos = o.geometry.attributes.position;
-      const si = o.geometry.attributes.skinIndex;
-      const sw = o.geometry.attributes.skinWeight;
-      if (!si || !sw) return;
-      for (let i = 0; i < pos.count; i++) {
-        const ids = [si.getX(i), si.getY(i), si.getZ(i), si.getW(i)];
-        const ws = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)];
-        for (let k = 0; k < 4; k++) {
-          if (ids[k] === idx && ws[k] > 0.5) {
-            out.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld));
-            break;
-          }
-        }
-      }
-    });
-    return out;
-  };
+  const findBone = (re) => bones.find((b) => re.test(b.name));
+  const headB = bones.find((b) => /^head$/i.test(b.name)) || findBone(/head/i);
+  const hipsB = findBone(/hips|pelvis/i);
+  const waistB = findBone(/abdomen|spine|waist/i) || hipsB;
+  const chestB = findBone(/torso|chest|spine2|upper/i) || waistB;
+  const neckB = findBone(/neck/i) || headB;
+  const waistY = waistB ? wp(waistB).y : CH * 0.45;
+  const neckY = neckB ? wp(neckB).y : waistY + CH * 0.25;
 
-  // 2) gloves on both hands
-  let hands = bones.filter((b) => /hand|palm|wrist|fist/i.test(b.name));
-  const sides = [[], []];
-  (hands.length ? hands : bones).forEach((b) => sides[wp(b).x > 0 ? 1 : 0].push(b));
-  sides.forEach((list) => {
-    if (!list.length) return;
-    let bone;
-    if (hands.length) bone = list.sort((a, b) => depth(a) - depth(b))[0];
-    else {
-      const far = list.sort((a, b) => Math.abs(wp(b).x) - Math.abs(wp(a).x))[0]; // outermost bone (a finger)
-      bone = far.parent && far.parent.isBone ? far.parent : far;
-    }
-    const glove = new THREE.Mesh(new THREE.SphereGeometry(CH * 0.1, 16, 12), gearMat);
-    const child = bone.children.find((c) => c.isBone);
-    glove.position.copy(child ? wp(bone).lerp(wp(child), 0.6) : wp(bone)); // sit on the fist, not the wrist
-    scene.add(glove);
-    glove.updateMatrixWorld(true);
-    bone.attach(glove);
-  });
-
-  // 3) headband + tails
-  const tails = [];
-  const headB = bones.find((b) => /^head$/i.test(b.name)) || bones.find((b) => /head/i.test(b.name));
-  if (headB) {
-    let hb = boneBox(headB);
-    if (hb.isEmpty()) {
-      const hp = wp(headB);
-      hb = new THREE.Box3(hp.clone().add(new THREE.Vector3(-CH * 0.18, 0, -CH * 0.18)), hp.clone().add(new THREE.Vector3(CH * 0.18, CH * 0.35, CH * 0.18)));
-    }
-    const c = hb.getCenter(new THREE.Vector3());
-    const sz = hb.getSize(new THREE.Vector3());
-    const rx = (sz.x / 2) * 1.06;
-    const rz = (sz.z / 2) * 1.06;
-    const band = new THREE.Mesh(new THREE.TorusGeometry(1, 0.2, 8, 28), gearMat);
-    band.rotation.x = Math.PI / 2; // lie flat around the head
-    band.scale.set(rx, rz, (rx + rz) / 2);
-    band.position.set(c.x, c.y + sz.y * 0.18, c.z);
-    // two tails knotted at the back (band-local -y = world back)
-    for (const sx of [-1, 1]) {
-      const pivot = new THREE.Group();
-      pivot.position.set(sx * 0.12, -1.02, 0);
-      pivot.rotation.z = sx * 0.25;
-      const tailGeo = new THREE.BoxGeometry(0.3, 1.1, 0.08);
-      tailGeo.translate(0, -0.55, 0);
-      pivot.add(new THREE.Mesh(tailGeo, gearMat));
-      pivot.userData.side = sx;
-      band.add(pivot);
-      tails.push(pivot);
-    }
-    scene.add(band);
-    band.updateMatrixWorld(true);
-    headB.attach(band);
-  }
-
-  // 4) black belt + gi lapels, fitted to the torso by slicing its vertices (rest pose)
+  // Rest-pose vertex scan: world position + dominant bone for every vertex
   const torsoRe = /hips|pelvis|abdomen|spine|torso|chest|waist|body/i;
+  const headRe = /head|neck|jaw|eye/i;
+  const handRe = /hand|palm|finger|thumb|index|middle|ring|pinky|wrist/i;
+  const foreRe = /lower.?arm|fore.?arm|elbow/i;
+  const armRe = /arm|shoulder|clavicle/i;
   const torsoPts = [];
-  const allPts = [];
+  const headPts = [];
+  const dressable = []; // { mesh, region: Uint8Array, open: Uint8Array }
   {
     const v = new THREE.Vector3();
     model.traverse((o) => {
-      if (!o.isMesh) return;
+      if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
       const pos = o.geometry.attributes.position;
       const si = o.geometry.attributes.skinIndex;
       const sw = o.geometry.attributes.skinWeight;
+      const hsl = {};
+      o.material.color && o.material.color.getHSL(hsl);
+      const dress = o.material.color && hsl.l > 0.12; // leave the black face screen / eyes alone
+      const region = new Uint8Array(pos.count);
+      const world = [];
       for (let i = 0; i < pos.count; i++) {
         const p = v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).clone();
-        allPts.push(p);
+        world.push(p);
+        let name = "";
         if (o.isSkinnedMesh && si && sw) {
           const ids = [si.getX(i), si.getY(i), si.getZ(i), si.getW(i)];
           const ws = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)];
           let k = 0;
           for (let j = 1; j < 4; j++) if (ws[j] > ws[k]) k = j;
           const b = o.skeleton.bones[ids[k]];
-          if (b && torsoRe.test(b.name)) torsoPts.push(p);
+          name = b ? b.name : "";
         }
+        // 1 head, 2 hand, 3 upper arm, 4 forearm, 5 torso, 6 pants, 7 shoes
+        let r;
+        if (headRe.test(name)) r = 1;
+        else if (handRe.test(name)) r = 2;
+        else if (foreRe.test(name)) r = 4;
+        else if (armRe.test(name)) r = 3;
+        else if (p.y < CH * 0.07) r = 7;
+        else if (p.y < waistY) r = 6;
+        else r = 5;
+        region[i] = r;
+        if (r === 5 && torsoRe.test(name)) torsoPts.push(p);
+        if (r === 1) headPts.push(p);
       }
+      if (dress) dressable.push({ mesh: o, region, world });
     });
   }
-  const pts = torsoPts.length > 50 ? torsoPts : allPts.filter((p) => Math.abs(p.x) < CH * 0.2);
-  const slice = (y, tol) => {
+  const slice = (src, y, tol) => {
     let n = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (const p of pts) {
+    for (const p of src) {
       if (Math.abs(p.y - y) > tol) continue;
       n++;
       if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
@@ -313,60 +252,276 @@ function init(gltf) {
     }
     return n < 6 ? null : { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2, rz: (z1 - z0) / 2, front: z1 };
   };
-  const sliceAt = (y) => slice(y, CH * 0.025) || slice(y, CH * 0.05) || slice(y, CH * 0.1);
-  const findBone = (re) => bones.find((b) => re.test(b.name));
-  const hipsB = findBone(/hips|pelvis/i);
-  const waistB = findBone(/abdomen|spine|waist/i) || hipsB;
-  const chestB = findBone(/torso|chest|spine2|upper/i) || waistB;
-  const neckB = findBone(/neck/i) || headB;
-  const anchorTo = (bone, obj) => {
+  const tPts = torsoPts.length > 50 ? torsoPts : dressable.flatMap((d) => d.world.filter((p, i) => d.region[i] === 5));
+  const sliceAt = (y) => slice(tPts, y, CH * 0.025) || slice(tPts, y, CH * 0.05) || slice(tPts, y, CH * 0.1);
+  const ws = sliceAt(waistY);
+  const topY = neckY - CH * 0.02;
+  const cs = sliceAt(topY - CH * 0.03);
+
+  // jacket opening (V down the chest) per vertex
+  for (const d of dressable) {
+    d.open = new Uint8Array(d.region.length);
+    if (!ws || !cs) continue;
+    d.world.forEach((p, i) => {
+      if (d.region[i] !== 5) return;
+      const t = clamp((p.y - waistY) / Math.max(1, topY - waistY), 0, 1);
+      const halfW = cs.rx * (0.06 + 0.32 * t);
+      if (p.z > ws.cz + ws.rz * 0.25 && Math.abs(p.x - cs.cx) < halfW) d.open[i] = 1;
+    });
+    d.world = null; // free memory
+    const m = d.mesh.material.clone();
+    m.color.set(0xffffff);
+    m.vertexColors = true;
+    m.metalness = Math.min(m.metalness ?? 0, 0.1);
+    m.roughness = Math.max(m.roughness ?? 1, 0.6);
+    d.mesh.material = m;
+    d.mesh.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(d.region.length * 3), 3));
+  }
+
+  // head box for hair / headband / cap
+  let hb = new THREE.Box3().setFromPoints(headPts);
+  if (headPts.length < 10 && headB) {
+    const hp = wp(headB);
+    hb = new THREE.Box3(hp.clone().add(new THREE.Vector3(-CH * 0.18, 0, -CH * 0.18)), hp.clone().add(new THREE.Vector3(CH * 0.18, CH * 0.35, CH * 0.18)));
+  }
+  const hc = hb.getCenter(new THREE.Vector3());
+  const hs = hb.getSize(new THREE.Vector3());
+  const HR = { x: hs.x / 2, y: hs.y / 2, z: hs.z / 2 };
+  const HAVG = (HR.x + HR.y + HR.z) / 3;
+
+  // glove bones (one per side)
+  const gloveSpots = [];
+  {
+    const hands = bones.filter((b) => /hand|palm|wrist|fist/i.test(b.name));
+    const sides = [[], []];
+    (hands.length ? hands : bones).forEach((b) => sides[wp(b).x > 0 ? 1 : 0].push(b));
+    sides.forEach((list) => {
+      if (!list.length) return;
+      let bone;
+      if (hands.length) bone = list.sort((a, b) => depth(a) - depth(b))[0];
+      else {
+        const far = list.sort((a, b) => Math.abs(wp(b).x) - Math.abs(wp(a).x))[0];
+        bone = far.parent && far.parent.isBone ? far.parent : far;
+      }
+      const child = bone.children.find((c) => c.isBone);
+      gloveSpots.push({ bone, pos: child ? wp(bone).lerp(wp(child), 0.6) : wp(bone) });
+    });
+  }
+
+  const OUTFITS = {
+    kyo: {
+      label: "Kyo style \u{1F525}", top: 0x1c1f2b, inner: 0xf2f2f2, open: true, sleeve: 0x1c1f2b, forearm: 0x1c1f2b,
+      pants: 0x1c1f2b, shoes: 0x2a2a2a, gloves: 0xd42a2a, headband: 0xf5f5f5,
+      hair: { color: 0x4a2c1a, style: "spiky" }, fx: 0xff7a1a,
+      lines: ["Burn!", "Orochinagi!", "Ora ora ora!"],
+    },
+    iori: {
+      label: "Iori style \u{1F319}", top: 0x241a2e, inner: 0xf0f0f0, open: true, sleeve: 0x241a2e, forearm: 0x241a2e,
+      pants: 0xa3122a, shoes: 0x1a1a1a, gloves: null, headband: null,
+      hair: { color: 0xb3122a, style: "bangs" }, fx: 0x9b4dff,
+      lines: ["Yasakani!", "Ha ha ha!", "Die... I mean, hi"],
+    },
+    terry: {
+      label: "Terry style \u{1F9E2}", top: 0xc8202a, inner: 0xf5f5f5, open: true, sleeve: 0xf5f5f5, forearm: "skin",
+      pants: 0x3a5fa0, shoes: 0xf5f5f5, gloves: 0x1b1b1b, headband: null,
+      cap: { color: 0xd2232a, front: 0xf5f5f5 }, hair: { color: 0xe8c35a, style: "ponytail" }, fx: 0xffd84a,
+      lines: ["Power Wave!", "Are you OK?!", "Burn Knuckle!"],
+    },
+    gi: {
+      label: "Dojo style \u{1F94B}", top: 0xebe6da, inner: null, open: false, sleeve: 0xebe6da, forearm: 0xebe6da,
+      pants: 0xebe6da, shoes: "skin", gloves: 0xe0262b, headband: 0xe0262b, belt: 0x151515, lapels: true,
+      hair: { color: 0x1b1b1b, style: "short" }, fx: 0x4aa8ff,
+      lines: ["Hadouken!", "Shoryuken!", "Hyah!"],
+    },
+  };
+  const OUTFIT_ORDER = ["kyo", "iori", "terry", "gi"];
+  const SKIN = 0xf1c4a1;
+
+  const tails = [];
+  let gear = [];
+  let outfit = null;
+  const mat = (color, rough = 0.6) => new THREE.MeshStandardMaterial({ color, roughness: rough });
+  const attachTo = (bone, obj) => {
     scene.add(obj);
     obj.updateMatrixWorld(true);
     (bone || model).attach(obj);
+    gear.push(obj);
   };
-  const waistY = waistB ? wp(waistB).y : CH * 0.45;
-  const ws = sliceAt(waistY);
-  if (ws) {
-    const beltMat = new THREE.MeshStandardMaterial({ color: BELT_COLOR, roughness: 0.8 });
+  // ellipsoid dome over the head; tilt < 0 lifts the front edge (forehead shows)
+  const dome = (color, k, tilt, cover) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 22, 14, 0, Math.PI * 2, 0, Math.PI * cover), mat(color, 0.7));
+    m.scale.set(HR.x * k, HR.y * k, HR.z * k);
+    m.position.copy(hc);
+    m.rotation.x = tilt;
+    return m;
+  };
+  const onHead = (ux, uy, uz, k = 1) => new THREE.Vector3(hc.x + ux * HR.x * k, hc.y + uy * HR.y * k, hc.z + uz * HR.z * k);
+
+  const buildHair = (h) => {
+    const g = new THREE.Group();
+    const hm = mat(h.color, 0.7);
+    if (h.style === "short") g.add(dome(h.color, 1.06, -0.45, 0.5));
+    if (h.style === "spiky") {
+      g.add(dome(h.color, 1.07, -0.4, 0.52));
+      for (let i = 0; i < 8; i++) {
+        const az = (i / 8) * Math.PI * 2 + 0.3;
+        const pol = 0.5 + (i % 2) * 0.25;
+        const dir = new THREE.Vector3(Math.sin(pol) * Math.sin(az), Math.cos(pol), Math.sin(pol) * Math.cos(az));
+        if (dir.z > 0.55) dir.y += 0.2; // spikes in front sweep up
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(HAVG * 0.28, HAVG * 0.75, 5), hm);
+        spike.position.copy(onHead(dir.x, dir.y, dir.z, 1.0));
+        spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+        g.add(spike);
+      }
+    }
+    if (h.style === "bangs") {
+      g.add(dome(h.color, 1.07, -0.25, 0.56));
+      const bang = new THREE.Mesh(new THREE.ConeGeometry(HAVG * 0.32, HAVG * 1.1, 5), hm);
+      bang.position.copy(onHead(-0.25, 0.15, 1.02));
+      bang.rotation.set(Math.PI + 0.25, 0, -0.35); // tip points down over one eye
+      g.add(bang);
+      for (const sx of [-1, 1]) {
+        const side = new THREE.Mesh(new THREE.ConeGeometry(HAVG * 0.22, HAVG * 0.9, 5), hm);
+        side.position.copy(onHead(sx * 0.95, -0.15, 0.2));
+        side.rotation.set(Math.PI, 0, sx * 0.15);
+        g.add(side);
+      }
+    }
+    if (h.style === "ponytail") {
+      g.add(dome(h.color, 1.05, -0.3, 0.55));
+      const tail = new THREE.Mesh(new THREE.CapsuleGeometry(HAVG * 0.16, HAVG * 0.9, 4, 8), hm);
+      tail.position.copy(onHead(0, -0.35, -1.05));
+      tail.rotation.x = 0.35;
+      g.add(tail);
+    }
+    return g;
+  };
+
+  const buildCap = (cap) => {
+    const g = new THREE.Group();
+    g.add(dome(cap.color, 1.13, -0.12, 0.47));
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.08, 20, 1, false, -Math.PI / 2, Math.PI), mat(cap.color, 0.7));
+    brim.scale.set(HR.x * 1.1, HAVG * 0.6, HR.z * 0.95);
+    brim.position.copy(onHead(0, 0.22, 0.25));
+    brim.rotation.x = 0.12;
+    g.add(brim);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(HR.x * 0.75, HR.y * 0.38, HAVG * 0.05), mat(cap.front, 0.8));
+    panel.position.copy(onHead(0, 0.58, 0.93, 1.1));
+    panel.rotation.x = -0.55;
+    g.add(panel);
+    return g;
+  };
+
+  const buildHeadband = (color) => {
+    const band = new THREE.Mesh(new THREE.TorusGeometry(1, 0.2, 8, 28), mat(color, 0.55));
+    band.rotation.x = Math.PI / 2;
+    band.scale.set(HR.x * 1.1, HR.z * 1.1, (HR.x + HR.z) * 0.55);
+    band.position.set(hc.x, hc.y + hs.y * 0.18, hc.z);
+    for (const sx of [-1, 1]) {
+      const pivot = new THREE.Group();
+      pivot.position.set(sx * 0.12, -1.02, 0);
+      pivot.rotation.z = sx * 0.25;
+      const tg = new THREE.BoxGeometry(0.3, 1.1, 0.08);
+      tg.translate(0, -0.55, 0);
+      pivot.add(new THREE.Mesh(tg, band.material));
+      pivot.userData.side = sx;
+      band.add(pivot);
+      tails.push(pivot);
+    }
+    return band;
+  };
+
+  const buildBelt = (color) => {
+    const bm = mat(color, 0.8);
     const belt = new THREE.Group();
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.16, 8, 32), beltMat);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.16, 8, 32), bm);
     ring.rotation.x = Math.PI / 2;
-    ring.scale.set(ws.rx * 1.06, ws.rz * 1.06, CH * 0.04 / 0.16); // ~2.7px tall band
+    ring.scale.set(ws.rx * 1.06, ws.rz * 1.06, (CH * 0.04) / 0.16);
     belt.add(ring);
-    // knot + two hanging ends at the front
     const fz = ws.cz + ws.rz * 1.06 + 0.4;
-    const knot = new THREE.Mesh(new THREE.BoxGeometry(CH * 0.08, CH * 0.07, CH * 0.04), beltMat);
+    const knot = new THREE.Mesh(new THREE.BoxGeometry(CH * 0.08, CH * 0.07, CH * 0.04), bm);
     knot.position.set(ws.cx, 0, fz);
     belt.add(knot);
     for (const sx of [-1, 1]) {
       const g = new THREE.BoxGeometry(CH * 0.045, CH * 0.17, CH * 0.02);
       g.translate(0, -CH * 0.085, 0);
-      const end = new THREE.Mesh(g, beltMat);
+      const end = new THREE.Mesh(g, bm);
       end.position.set(ws.cx + sx * CH * 0.015, -CH * 0.01, fz + 0.2);
       end.rotation.z = sx * 0.3;
       belt.add(end);
     }
     belt.position.set(0, waistY, 0);
-    anchorTo(waistB, belt);
-  }
-  // lapels: a V from the collar down to the belt on the chest
-  const topY = neckB ? wp(neckB).y - CH * 0.02 : waistY + CH * 0.2;
-  const cs = sliceAt(topY - CH * 0.03);
-  if (ws && cs && topY > waistY + CH * 0.05) {
-    const seamMat = new THREE.MeshStandardMaterial({ color: GI_SEAM_COLOR, roughness: 0.9 });
-    const lapels = new THREE.Group();
+    return belt;
+  };
+
+  const buildLapels = () => {
+    const sm = mat(0xb3aa95, 0.9);
+    const g = new THREE.Group();
     const bottom = new THREE.Vector3(ws.cx, waistY + CH * 0.03, ws.front + 0.35);
     for (const sx of [-1, 1]) {
       const top = new THREE.Vector3(cs.cx + sx * cs.rx * 0.45, topY, cs.front + 0.35);
       const dir = new THREE.Vector3().subVectors(top, bottom);
-      const len = dir.length();
-      const seam = new THREE.Mesh(new THREE.BoxGeometry(CH * 0.035, len, CH * 0.02), seamMat);
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(CH * 0.035, dir.length(), CH * 0.02), sm);
       seam.position.copy(bottom).addScaledVector(dir, 0.5);
       seam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-      lapels.add(seam);
+      g.add(seam);
     }
-    anchorTo(chestB, lapels);
-  }
+    return g;
+  };
+
+  const applyOutfit = (key) => {
+    const o = OUTFITS[key] || OUTFITS.kyo;
+    outfit = o;
+    // 1) clothes = vertex colors by body region
+    const C = (hex) => new THREE.Color(hex === "skin" ? SKIN : hex);
+    const pal = {
+      1: C(SKIN),
+      2: C(o.gloves ? o.gloves : SKIN),
+      3: C(o.sleeve),
+      4: C(o.forearm),
+      5: C(o.top),
+      6: C(o.pants),
+      7: C(o.shoes),
+    };
+    const innerC = o.inner != null ? C(o.inner) : null;
+    for (const d of dressable) {
+      const col = d.mesh.geometry.attributes.color;
+      for (let i = 0; i < d.region.length; i++) {
+        const c = o.open && innerC && d.open[i] ? innerC : pal[d.region[i]] || pal[5];
+        col.setXYZ(i, c.r, c.g, c.b);
+      }
+      col.needsUpdate = true;
+    }
+    // 2) gear: clear old, build new
+    gear.forEach((g) => g.removeFromParent());
+    gear = [];
+    tails.length = 0;
+    if (o.gloves) {
+      for (const gs of gloveSpots) {
+        const glove = new THREE.Mesh(new THREE.SphereGeometry(CH * 0.1, 16, 12), mat(o.gloves, 0.55));
+        glove.position.copy(gs.pos);
+        attachTo(gs.bone, glove);
+      }
+    }
+    if (headB) {
+      if (o.hair) attachTo(headB, buildHair(o.hair));
+      if (o.cap) attachTo(headB, buildCap(o.cap));
+      if (o.headband) attachTo(headB, buildHeadband(o.headband));
+    }
+    if (o.belt && ws) attachTo(waistB, buildBelt(o.belt));
+    if (o.lapels && ws && cs && topY > waistY + CH * 0.05) attachTo(chestB, buildLapels());
+    try { localStorage.setItem("buddyOutfit", key); } catch (e) {}
+  };
+
+  let outfitKey = null;
+  try { outfitKey = localStorage.getItem("buddyOutfit"); } catch (e) {}
+  if (!OUTFITS[outfitKey]) outfitKey = pick(["kyo", "iori", "terry"]); // random fighter on first visit
+  applyOutfit(outfitKey);
+  const nextOutfit = () => {
+    outfitKey = OUTFIT_ORDER[(OUTFIT_ORDER.indexOf(outfitKey) + 1) % OUTFIT_ORDER.length];
+    applyOutfit(outfitKey);
+    return OUTFITS[outfitKey];
+  };
 
   // head bone (for looking at the cursor) + face morphs (expressions), if the model has them
   let headBone = null;
@@ -441,9 +596,7 @@ function init(gltf) {
   stars.visible = false;
 
   // ---------- Helpers ----------
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
   const rectOf = (el) => {
     if (el.matches("section h2, .stat-item h3")) {
@@ -486,7 +639,7 @@ function init(gltf) {
     d.textContent = pick(["POW!", "BAM!", "WHAM!", "K.O.!"]);
     Object.assign(d.style, {
       position: "fixed", left: x + "px", top: y + "px", zIndex: "1002", pointerEvents: "none",
-      background: "#ffd400", color: "#111", border: "2px solid #111", borderRadius: "6px",
+      background: "#" + new THREE.Color(outfit.fx).getHexString(), color: "#111", border: "2px solid #111", borderRadius: "6px",
       boxShadow: "2px 2px 0 #111", padding: "1px 6px", font: "900 13px Outfit, sans-serif",
       letterSpacing: "0.03em", whiteSpace: "nowrap",
     });
@@ -500,6 +653,26 @@ function init(gltf) {
       ],
       { duration: 700, easing: "ease-out" }
     ).onfinish = () => d.remove();
+    // fire / energy sparks in the fighter's color
+    const fx = "#" + new THREE.Color(outfit.fx).getHexString();
+    for (let i = 0; i < 7; i++) {
+      const f = document.createElement("div");
+      const sz = 3 + Math.random() * 4;
+      Object.assign(f.style, {
+        position: "fixed", left: x + "px", top: y + "px", width: sz + "px", height: sz + "px",
+        borderRadius: "50%", background: fx, boxShadow: `0 0 6px ${fx}`, pointerEvents: "none", zIndex: "1002",
+      });
+      document.body.appendChild(f);
+      const a = Math.random() * Math.PI * 2;
+      const dist = 8 + Math.random() * 16;
+      f.animate(
+        [
+          { transform: "translate(-50%, -50%) scale(1)", opacity: 1 },
+          { transform: `translate(calc(-50% + ${Math.cos(a) * dist}px), calc(-50% + ${Math.sin(a) * dist - 10}px)) scale(0.2)`, opacity: 0 },
+        ],
+        { duration: 420 + Math.random() * 200, easing: "ease-out" }
+      ).onfinish = () => f.remove();
+    }
     if (el && el.animate) {
       el.animate(
         [
@@ -641,14 +814,17 @@ function init(gltf) {
     if (st.type !== "hop") puff(e.x, e.y, st.type === "fall" ? 5 : 4, 1);
 
     const gesture = (clip, proc, dur) => (clips[clip] ? playSeq([clip]) : doProc(proc, dur));
-    if (!st.introDone) { st.introDone = true; play("idle"); say("Round 1... FIGHT!", 1.8); }
+    if (!st.introDone) { st.introDone = true; play("idle"); say(outfit.label.split(" ")[0] + " enters! FIGHT!", 1.8); }
     else if (el.matches(".contact-section .btn")) { punch(true); say("New challenger? Say hi! \u{1F44A}", 2.2); }
     else if (el.matches(".hero-image")) { gesture("cheer", "spin", 0.6); say("That's me!"); }
     else if (el.matches(".nav-actions .btn")) { punch(true); say("Let's talk!"); }
-    else if (el.matches(".btn, .tag, .contact-section a")) punch(true);
+    else if (el.matches(".btn, .tag, .contact-section a")) {
+      punch(true);
+      if (Math.random() < 0.4) say(pick(outfit.lines), 1.1);
+    }
     else if (st.type === "super") {
       gesture("cheer", "spin", 0.6);
-      if (Math.random() < 0.6) say(pick(["Shoryuken!", "Hyah!", "Too easy"]), 1.1);
+      if (Math.random() < 0.6) say(pick(outfit.lines.concat(["Too easy"])), 1.1);
     } else play("idle", { fade: 0.2 });
   };
 
@@ -669,6 +845,16 @@ function init(gltf) {
       if (clips.dance || !rigged) { if (clips.dance) playSeq(["dance"]); else doProc("dance", 1.6); if (Math.random() < 0.4) say(pick(["\u{1F57A}", "Party!", "Hire me, I dance too"]), 1.3); }
       else goTo(el, true);
     }
+  });
+
+  // Double-click the thing he's standing on: costume change!
+  document.addEventListener("dblclick", (e) => {
+    const el = e.target.closest ? e.target.closest(PLATFORMS) : null;
+    if (!el || el !== st.el || st.mode === "air") return;
+    const o = nextOutfit();
+    puff(st.sx, st.sy - CH * 0.5, 10, 1.4);
+    doProc("spin", 0.5);
+    say(o.label, 1.6);
   });
 
   // Intro: drop in from the sky onto the first nav link
@@ -817,7 +1003,7 @@ function init(gltf) {
         st.idleT = 0;
         st.nextShadowbox = 7 + Math.random() * 6;
         punch(false);
-        if (Math.random() < 0.35) say(pick(["Hyah!", "Hadouken!", "Fight me", "Bring it"]), 1);
+        if (Math.random() < 0.35) say(pick(outfit.lines.concat(["Fight me", "Bring it"])), 1);
       }
     } else if (st.mode !== "idle") st.idleT = 0;
 
